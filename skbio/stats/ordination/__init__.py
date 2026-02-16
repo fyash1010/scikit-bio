@@ -160,8 +160,6 @@ from ._redundancy_analysis import rda
 from ._correspondence_analysis import ca
 from ._canonical_correspondence_analysis import cca
 from ._principal_coordinate_analysis import pcoa, pcoa_biplot
-from ._principal_coordinate_analysis_JAX import pcoa_JAX
-from ._principal_coordinate_analysis_in_unified import pcoa_in_unified
 from ._ordination_results import OrdinationResults
 from ._utils import (
     mean_and_std,
@@ -178,7 +176,6 @@ __all__ = [
     "rda",
     "cca",
     "pcoa",
-    "pcoa_JAX",
     "pcoa_biplot",
     "OrdinationResults",
     "mean_and_std",
