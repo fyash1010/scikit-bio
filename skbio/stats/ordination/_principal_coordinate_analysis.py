@@ -12,16 +12,7 @@ from warnings import warn
 import numpy as np
 import pandas as pd
 
-# Dont want dependency. - We want to remove but what if xp != np
-import cupy as cp
-import jax
-import jax.numpy as jnp
-
-
 from scipy.linalg import eigh as scipy_eigh
-from numpy import dot, hstack
-from numpy.linalg import qr, svd
-from scipy.linalg import eigh
 
 from skbio.util import get_rng
 from skbio.stats.distance import DistanceMatrix
@@ -33,7 +24,7 @@ from skbio.binaries import (
     pcoa_fsvd as _skbb_pcoa_fsvd,
 )
 from skbio.util._decorator import params_aliased
-from skbio.util._array import ingest_array  # CL MODIFICATION
+from skbio.util._array import ingest_array
 
 
 # helpers
@@ -55,9 +46,9 @@ def center_distance_matrix(distance_matrix, inplace=False):
     argument is accepted for API compatibility but ignored — the function
     always returns a centered array.
     """
-    xp, distance_matrix = ingest_array(distance_matrix)  # CL MODIFICATION
-    if xp is not np:  # CL MODIFICATION
-        return f_matrix(e_matrix(distance_matrix))  # CL MODIFICATION
+    xp, distance_matrix = ingest_array(distance_matrix)
+    if xp is not np:
+        return f_matrix(e_matrix(distance_matrix))
     return center_distance_matrix_np(distance_matrix, inplace=inplace)
 
 
@@ -68,20 +59,15 @@ def _host_partial_eigh(matrix_any, subidx):
     runs SciPy's `eigh` with `subset_by_index`, then moves results back to
     device for JAX/CuPy.
     """
-    xp, matrix_any = ingest_array(matrix_any)  # CL MODIFICATION
-    # Note: asnumpy() is CuPy-specific, but asarray() works for all
-    # if xp is cp:  #CL MODIFICATION
-    #     mat_np = xp.asnumpy(matrix_any)  #CL MODIFICATION
-    # else:  #CL MODIFICATION
-    #     mat_np = np.asarray(matrix_any)  #CL MODIFICATION
-    mat_np = np.asarray(matrix_any)  # CL MODIFICATION - no cp
+    xp, matrix_any = ingest_array(matrix_any)
+    mat_np = np.asarray(matrix_any)
     if mat_np.dtype != np.float64:
         mat_np = mat_np.astype(np.float64, copy=False)
     mat_np = np.ascontiguousarray(mat_np)
 
     eigvals_np, eigvecs_np = scipy_eigh(mat_np, subset_by_index=subidx)
 
-    return xp.asarray(eigvals_np), xp.asarray(eigvecs_np)  # CL MODIFICATION
+    return xp.asarray(eigvals_np), xp.asarray(eigvecs_np)
 
 
 @params_aliased(
@@ -264,13 +250,11 @@ def pcoa(
                 )
             ndim = matrix_data.shape[0]
         subidx = [matrix_data.shape[0] - ndim, matrix_data.shape[0] - 1]
-        xp, matrix_data = ingest_array(matrix_data)  # CL MODIFICATION
-        if ndim < matrix_data.shape[0]:  # CL MODIFICATION
-            eigvals, eigvecs = _host_partial_eigh(
-                matrix_data, subidx
-            )  # CL MODIFICATION
-        else:  # CL MODIFICATION
-            eigvals, eigvecs = xp.linalg.eigh(matrix_data)  # CL MODIFICATION
+        xp, matrix_data = ingest_array(matrix_data)
+        if ndim < matrix_data.shape[0]:
+            eigvals, eigvecs = _host_partial_eigh(matrix_data, subidx)
+        else:
+            eigvals, eigvecs = xp.linalg.eigh(matrix_data)
     elif method == "fsvd":
         long_method_name = "Approximate Principal Coordinate Analysis using FSVD"
         if 0 < dimensions < 1:
@@ -292,18 +276,16 @@ def pcoa(
                 eigvals, coordinates, proportion_explained = _skbb_pcoa_fsvd(
                     distmat.data, dimensions, inplace, seed
                 )
-                xp_eigvals, eigvals = ingest_array(eigvals)  # CL MODIFICATION
-                xp_coordinates, coordinates = ingest_array(
-                    coordinates
-                )  # CL MODIFICATION
+                xp_eigvals, eigvals = ingest_array(eigvals)
+                xp_coordinates, coordinates = ingest_array(coordinates)
                 xp_proportion_explained, proportion_explained = ingest_array(
                     proportion_explained
-                )  # CL MODIFICATION
+                )
                 eigvals, coordinates, proportion_explained = (
                     xp_eigvals.asarray(eigvals),
                     xp_coordinates.asarray(coordinates),
                     xp_proportion_explained.asarray(proportion_explained),
-                )  # CL MODIFICATION
+                )
                 return _encapsulate_pcoa_result(
                     long_method_name,
                     eigvals,
@@ -334,14 +316,9 @@ def pcoa(
     # abs value, but that doesn't seem to be an approach accepted
     # by L&L to deal with negative eigenvalues. We raise a warning
     # in that case. First, we make values close to 0 equal to 0.
-    xp, eigvals = ingest_array(eigvals)  # CL MODIFICATION
-    negative_close_to_zero = xp.isclose(eigvals, 0)  # CL MODIFICATION
-    if xp is jnp:  # CL MODIFICATION
-        eigvals = eigvals.at[negative_close_to_zero].set(0)  # CL MODIFICATION
-    elif xp is not np:  # CL MODIFICATION
-        eigvals = xp.where(negative_close_to_zero, 0, eigvals)  # CL MODIFICATION
-    else:  # CL MODIFICATION
-        eigvals[negative_close_to_zero] = 0  # CL MODIFICATION
+    xp, eigvals = ingest_array(eigvals)
+    negative_close_to_zero = xp.isclose(eigvals, 0)
+    eigvals = xp.where(negative_close_to_zero, 0, eigvals)
 
     # eigvals might not be ordered, so we first sort them, then analogously
     # sort the eigenvectors by the ordering of the eigenvalues too
@@ -351,7 +328,7 @@ def pcoa(
 
     # large negative eigenvalues suggest result inaccuracy
     # see: https://github.com/scikit-bio/scikit-bio/issues/1410
-    if warn_neg_eigval and eigvals[-1] < 0:
+    if warn_neg_eigval and float(eigvals[-1]) < 0:
         if warn_neg_eigval is True or -eigvals[-1] > eigvals[0] * warn_neg_eigval:
             warn(
                 "The result contains negative eigenvalues that are large in magnitude,"
@@ -366,19 +343,14 @@ def pcoa(
     # won't work as it expects all the OrdinationResults to have the same
     # number of coordinates. In order to solve this issue, we return the
     # coordinates that have a negative eigenvalue as 0
-    xp_vec, eigvecs = ingest_array(eigvecs)  # CL MODIFICATION
+    xp, eigvecs = ingest_array(eigvecs)
     # assume same backend for eigvals and eigvecs
-    num_positive = (eigvals >= 0).sum()  # CL MODIFICATION
-    if xp is jnp:  # CL MODIFICATION
-        eigvecs = eigvecs.at[:, num_positive:].set(0)  # CL MODIFICATION
-        eigvals = eigvals.at[num_positive:].set(0)  # CL MODIFICATION
-    else:  # CL MODIFICATION
-        eigvecs[:, num_positive:] = xp.zeros(
-            eigvecs[:, num_positive:].shape
-        )  # CL MODIFICATION
-        eigvals[num_positive:] = xp.zeros(
-            eigvals[num_positive:].shape
-        )  # CL MODIFICATION
+    num_positive = (eigvals >= 0).sum()
+    idx = xp.arange(eigvals.shape[0])
+    mask = idx < num_positive
+
+    eigvals = xp.where(mask, eigvals, 0)
+    eigvecs = eigvecs * mask
 
     if ndim != distmat.data.shape[0]:
         # Since the dimension parameter, hereafter referred to as 'd',
@@ -393,21 +365,17 @@ def pcoa(
         # An alternative method of calculating th sum of eigenvalues is by
         # computing the trace of the centered distance matrix.
         # See proof outlined here: https://goo.gl/VAYiXx
-        xp_mat, matrix_data = ingest_array(matrix_data)  # CL MODIFICATION
-        sum_eigenvalues = xp_mat.trace(matrix_data)  # CL MODIFICATION
+        xp_mat, matrix_data = ingest_array(matrix_data)
+        sum_eigenvalues = xp_mat.trace(matrix_data)
     else:
         # Calculate proportions the usual way
-        sum_eigenvalues = xp.sum(eigvals)  # CL MODIFICATION
+        sum_eigenvalues = xp.sum(eigvals)
 
     proportion_explained = eigvals / sum_eigenvalues
     if 0 < dimensions < 1:
-        xp_prop, proportion_explained = ingest_array(
-            proportion_explained
-        )  # CL MODIFICATION
-        cumulative_variance = xp_prop.cumsum(proportion_explained)  # CL MODIFICATION
-        ndim = (
-            xp_prop.searchsorted(cumulative_variance, dimensions, side="left") + 1
-        )  # CL MODIFICATION
+        xp_prop, proportion_explained = ingest_array(proportion_explained)
+        cumulative_variance = xp_prop.cumsum(proportion_explained)
+        ndim = xp_prop.searchsorted(cumulative_variance, dimensions, side="left") + 1
         # gives the number of dimensions needed to reach specified variance
         # updates number of dimensions to reach the requirement of variance.
         dimensions = ndim
@@ -426,7 +394,7 @@ def pcoa(
     # objects in the space of principal coordinates. Note that at
     # least one eigenvalue is zero because only n-1 axes are
     # needed to represent n points in a euclidean space.
-    coordinates = eigvecs * xp.sqrt(eigvals)  # CL MODIFICATION
+    coordinates = eigvecs * xp.sqrt(eigvals)
 
     return _encapsulate_pcoa_result(
         long_method_name,
@@ -567,9 +535,7 @@ def _fsvd(centered_distance_matrix, dimensions=10, seed=None):
     rng = get_rng(seed)
     G = rng.standard_normal(size=(n, k))
 
-    xp, centered_distance_matrix = ingest_array(
-        centered_distance_matrix
-    )  # CL MODIFICATION
+    xp, centered_distance_matrix = ingest_array(centered_distance_matrix)
     # `use_power_method` is constantly False, so `if` won't start.
     if use_power_method:  # pragma: no cover
         # use only the given exponent
@@ -587,7 +553,7 @@ def _fsvd(centered_distance_matrix, dimensions=10, seed=None):
         # Note that this is done implicitly in each iteration below.
         H = xp.dot(centered_distance_matrix, G)
         # to enhance performance
-        H = hstack(
+        H = xp.hstack(
             (H, xp.dot(centered_distance_matrix, xp.dot(centered_distance_matrix, H)))
         )
 
@@ -595,7 +561,7 @@ def _fsvd(centered_distance_matrix, dimensions=10, seed=None):
         for x in range(3, num_levels + 2):  # pragma: no cover
             tmp = xp.dot(centered_distance_matrix, xp.dot(centered_distance_matrix, H))
 
-            H = hstack(
+            H = xp.hstack(
                 (
                     H,
                     xp.dot(
@@ -607,13 +573,13 @@ def _fsvd(centered_distance_matrix, dimensions=10, seed=None):
     # Using the pivoted QR-decomposition, form a real m * ((i+1)l) matrix Q
     # whose columns are orthonormal, s.t. there exists a real
     # ((i+1)l) * ((i+1)l) matrix R for which H = QR
-    xp_q, H = ingest_array(H)  # CL MODIFICATION
+    xp_q, H = ingest_array(H)
     Q, R = xp_q.qr(H)
 
     # Compute the n * ((i+1)l) product matrix T = A^T Q
     T = xp.dot(centered_distance_matrix, Q)  # step 3
     # Form an SVD of T
-    xp_s, T = ingest_array(T)  # CL MODIFICATION
+    xp_s, T = ingest_array(T)
     Vt, St, W = xp_s.svd(T, full_matrices=False)
     W = W.transpose()
 
@@ -687,18 +653,19 @@ def pcoa_biplot(ordination, y):
     # S_pc from equation 9.44
     # Represents the covariance matrix between the features matrix and the
     # column-centered eigenvectors of the pcoa.
-    xp, coordinates = ingest_array(coordinates)  # CL MODIFICATION
-    spc = (1 / (N - 1)) * xp.dot(
-        y.values.T, scale(coordinates, ddof=1)
-    )  # CL MODIFICATION
+    xp, coordinates = ingest_array(coordinates)
+    spc = (1 / (N - 1)) * xp.dot(y.values.T, scale(coordinates, ddof=1))
 
     # U_proj from equation 9.55, is the matrix of descriptors to be projected.
     #
     # Only get the power of non-zero values, otherwise this will raise a
     # divide by zero warning. There shouldn't be negative eigenvalues(?)
     Uproj = xp.sqrt(N - 1) * xp.dot(
-        spc, xp.diag(xp.power(eigvals, -0.5, where=eigvals > 0))
-    )  # CL MODIFICATION
+        spc,
+        xp.diag(
+            xp.where(eigvals > 0, xp.power(xp.where(eigvals > 0, eigvals, 1), -0.5), 0)
+        ),
+    )
 
     ordination.features = pd.DataFrame(
         data=Uproj, index=y.columns.copy(), columns=coordinates.columns.copy()
