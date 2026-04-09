@@ -92,6 +92,24 @@ def _numpy_reference(mat, centered):
     centered[:] = e - row_means[:, None] - row_means[None, :] + global_mean
 
 
+def _jax_pcoa_impl():
+    """Return JAX-backed center_distance_matrix implementation if available."""
+    try:
+        import jax
+        import jax.numpy as jnp
+        from skbio.stats.ordination._principal_coordinate_analysis import (
+            center_distance_matrix as center_distance_matrix_pcoa,
+        )
+    except Exception:
+        return None
+
+    def _run(mat_jax):
+        out = center_distance_matrix_pcoa(mat_jax, inplace=False)
+        return jax.block_until_ready(out)
+
+    return jax, jnp, _run
+
+
 def _time(fn, *args, repeats=8):
     fn(*args)
     ts = []
@@ -102,8 +120,23 @@ def _time(fn, *args, repeats=8):
     return np.array(ts)
 
 
+def _time_cold_and_warm(fn, *args, repeats=8):
+    t0 = time.perf_counter()
+    fn(*args)
+    cold = time.perf_counter() - t0
+
+    warm = []
+    for _ in range(repeats):
+        t0 = time.perf_counter()
+        fn(*args)
+        warm.append(time.perf_counter() - t0)
+
+    warm = np.array(warm)
+    return cold, warm
+
+
 def benchmark(n=2000, dtype=np.float64, repeats=8):
-    """Benchmark Numba centering against NumPy reference."""
+    """Benchmark Numba centering against NumPy and JAX PCoA centering."""
     rng = np.random.default_rng(0)
     mat = rng.random((n, n)).astype(dtype)
     mat = ((mat + mat.T) / 2).copy()
@@ -111,26 +144,98 @@ def benchmark(n=2000, dtype=np.float64, repeats=8):
     out_nb = np.empty_like(mat)
     out_np = np.empty_like(mat)
 
-    t_nb = _time(center_distance_matrix_nb, mat, out_nb, repeats=repeats)
-    t_np = _time(_numpy_reference, mat, out_np, repeats=repeats)
+    cold_nb, t_nb = _time_cold_and_warm(
+        center_distance_matrix_nb, mat, out_nb, repeats=repeats
+    )
+    cold_np, t_np = _time_cold_and_warm(_numpy_reference, mat, out_np, repeats=repeats)
 
     if dtype == np.float32:
         np.testing.assert_allclose(out_nb, out_np, rtol=1e-4, atol=1e-6)
     else:
         np.testing.assert_allclose(out_nb, out_np, rtol=1e-4)
 
-    return {
+    result = {
+        "numba_cold_s": float(cold_nb),
         "numba_mean_s": float(t_nb.mean()),
         "numba_std_s": float(t_nb.std()),
+        "numpy_cold_s": float(cold_np),
         "numpy_mean_s": float(t_np.mean()),
         "numpy_std_s": float(t_np.std()),
-        "speedup": float(t_np.mean() / t_nb.mean()),
+        "speedup_numba_vs_numpy": float(t_np.mean() / t_nb.mean()),
     }
+
+    jax_impl = _jax_pcoa_impl()
+    if jax_impl is not None:
+        jax, jnp, jax_run = jax_impl
+        mat_jax = jnp.asarray(mat)
+
+        cold_jax, t_jax = _time_cold_and_warm(jax_run, mat_jax, repeats=repeats)
+        out_jax = np.asarray(jax.device_get(jax_run(mat_jax)))
+
+        if dtype == np.float32:
+            np.testing.assert_allclose(out_jax, out_np, rtol=1e-4, atol=1e-6)
+        else:
+            # Include a small absolute tolerance because relative-only checks can
+            # over-report tiny near-zero differences across backends.
+            np.testing.assert_allclose(out_jax, out_np, rtol=1e-4, atol=1e-7)
+
+        result.update(
+            {
+                "jax_cold_s": float(cold_jax),
+                "jax_mean_s": float(t_jax.mean()),
+                "jax_std_s": float(t_jax.std()),
+                "speedup_numba_vs_jax": float(t_jax.mean() / t_nb.mean()),
+            }
+        )
+    else:
+        result["jax_cold_s"] = None
+        result["jax_mean_s"] = None
+        result["jax_std_s"] = None
+        result["speedup_numba_vs_jax"] = None
+
+    return result
+
+
+def _fmt_ms(mean_s, std_s):
+    return f"{mean_s * 1e3:8.2f} ms +- {std_s * 1e3:6.2f}"
+
+
+def _fmt_cold_s(cold_s):
+    return f"{cold_s * 1e3:8.2f} ms"
+
+
+def _print_result(label, result):
+    print(f"\\n{label}")
+    print("  backend   cold run      warm runs (mean +- std)")
+    print("  -------   --------      ----------------------")
+    print(
+        f"  Numba   {_fmt_cold_s(result['numba_cold_s'])}    "
+        f"{_fmt_ms(result['numba_mean_s'], result['numba_std_s'])}"
+    )
+    print(
+        f"  NumPy   {_fmt_cold_s(result['numpy_cold_s'])}    "
+        f"{_fmt_ms(result['numpy_mean_s'], result['numpy_std_s'])}"
+    )
+    if result["jax_mean_s"] is None:
+        print("  JAX     not available")
+    else:
+        print(
+            f"  JAX     {_fmt_cold_s(result['jax_cold_s'])}    "
+            f"{_fmt_ms(result['jax_mean_s'], result['jax_std_s'])}"
+        )
+    print(f"  speedup numba vs numpy: {result['speedup_numba_vs_numpy']:.2f}x")
+    if result["speedup_numba_vs_jax"] is not None:
+        print(f"  speedup numba vs jax  : {result['speedup_numba_vs_jax']:.2f}x")
 
 
 if __name__ == "__main__":
+    print("== center_distance_matrix benchmark: Numba vs NumPy vs JAX (PCoA path) ==")
+    print("Cold run = first measured call; warm runs = repeated timed calls.")
     warmup()
     for size in (500, 1000, 2000, 4000):
         result = benchmark(n=size, dtype=np.float64, repeats=8)
-        print(size, result)
-    print("float32", benchmark(n=2000, dtype=np.float32, repeats=8))
+        _print_result(f"n={size}, dtype=float64, repeats=8", result)
+    _print_result(
+        "n=2000, dtype=float32, repeats=8",
+        benchmark(n=2000, dtype=np.float32, repeats=8),
+    )
