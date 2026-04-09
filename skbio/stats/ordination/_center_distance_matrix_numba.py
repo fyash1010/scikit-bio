@@ -228,10 +228,25 @@ def _print_result(label, result):
         print(f"  speedup numba vs jax  : {result['speedup_numba_vs_jax']:.2f}x")
 
 
+def _print_runtime_info():
+    try:
+        import numba
+    except Exception:
+        return
+
+    try:
+        layer = numba.threading_layer()
+    except Exception:
+        layer = "unknown"
+
+    print(f"Active Numba threading layer: {layer}")
+
+
 if __name__ == "__main__":
     print("== center_distance_matrix benchmark: Numba vs NumPy vs JAX (PCoA path) ==")
     print("Cold run = first measured call; warm runs = repeated timed calls.")
     warmup()
+    _print_runtime_info()
     for size in (500, 1000, 2000, 4000):
         result = benchmark(n=size, dtype=np.float64, repeats=8)
         _print_result(f"n={size}, dtype=float64, repeats=8", result)
