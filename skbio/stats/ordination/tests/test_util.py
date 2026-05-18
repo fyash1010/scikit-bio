@@ -6,8 +6,9 @@
 # The full license is in the file LICENSE.txt, distributed with this software.
 # ----------------------------------------------------------------------------
 
-from unittest import TestCase, main
 import copy
+from unittest import TestCase, main
+from unittest.mock import patch
 
 import numpy as np
 import numpy.testing as npt
@@ -121,6 +122,64 @@ class TestUtils(TestCase):
 
         # and ensure that the result of inplace centering was correct
         npt.assert_almost_equal(dm_expected, dm_centered_inp)
+
+    def test_center_distance_matrix_invalid_backend(self):
+        with patch.dict(
+            "os.environ",
+            {"SKBIO_PCOA_CENTER_BACKEND": "invalid_backend"},
+        ):
+            with self.assertRaisesRegex(ValueError, "SKBIO_PCOA_CENTER_BACKEND"):
+                center_distance_matrix(self.dist_mat)
+
+    def test_center_distance_matrix_numba(self):
+        try:
+            import numba  # noqa: F401
+        except Exception:
+            self.skipTest("Numba is not importable.")
+
+        dm_expected = f_matrix(e_matrix(self.dist_mat))
+        matrix_copy = copy.deepcopy(self.dist_mat)
+        with patch.dict("os.environ", {"SKBIO_PCOA_CENTER_BACKEND": "numba"}):
+            dm_centered = center_distance_matrix(matrix_copy)
+
+        self.assertTrue(np.array_equal(matrix_copy, self.dist_mat))
+        npt.assert_allclose(dm_expected, dm_centered, rtol=1e-7, atol=1e-7)
+
+    def test_center_distance_matrix_numba_inplace(self):
+        try:
+            import numba  # noqa: F401
+        except Exception:
+            self.skipTest("Numba is not importable.")
+
+        dm_expected = f_matrix(e_matrix(self.dist_mat))
+        matrix_copy = copy.deepcopy(self.dist_mat)
+        with patch.dict("os.environ", {"SKBIO_PCOA_CENTER_BACKEND": "numba"}):
+            dm_centered = center_distance_matrix(matrix_copy, inplace=True)
+        npt.assert_allclose(dm_expected, dm_centered, rtol=1e-7, atol=1e-7)
+        npt.assert_allclose(dm_expected, matrix_copy, rtol=1e-7, atol=1e-7)
+
+    def test_center_distance_matrix_numba_gpu(self):
+        try:
+            from skbio.stats.ordination._center_distance_matrix_numba_gpu import (
+                NumbaGPUUnavailableError,
+            )
+        except Exception:
+            self.skipTest("Numba GPU helper is not importable.")
+
+        try:
+            with patch.dict(
+                "os.environ",
+                {
+                    "SKBIO_PCOA_CENTER_BACKEND": "numba_gpu",
+                    "SKBIO_NUMBA_GPU_BACKEND": "cuda",
+                },
+            ):
+                dm_centered = center_distance_matrix(self.dist_mat)
+        except NumbaGPUUnavailableError:
+            self.skipTest("Numba GPU backend is not available.")
+
+        dm_expected = f_matrix(e_matrix(self.dist_mat))
+        npt.assert_allclose(dm_expected, dm_centered, rtol=1e-7, atol=1e-7)
 
 
 if __name__ == '__main__':
