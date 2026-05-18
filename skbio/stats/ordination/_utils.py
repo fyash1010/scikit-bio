@@ -6,9 +6,21 @@
 # The full license is in the file LICENSE.txt, distributed with this software.
 # ----------------------------------------------------------------------------
 
+import os
+
 import numpy as np
 
 from ._cutils import center_distance_matrix_cy
+
+
+def _get_center_backend():
+    center_backend = os.environ.get("SKBIO_PCOA_CENTER_BACKEND", "cpu")
+    if center_backend not in {"cpu", "numba", "numba_gpu"}:
+        raise ValueError(
+            "SKBIO_PCOA_CENTER_BACKEND must be 'cpu', 'numba', or "
+            f"'numba_gpu', not {center_backend!r}."
+        )
+    return center_backend
 
 
 def mean_and_std(a, axis=None, weights=None, with_mean=True, with_std=True, ddof=0):
@@ -213,11 +225,37 @@ def center_distance_matrix(distance_matrix, inplace=False):
     inplace : bool, optional
         Whether or not to center the given distance matrix in-place, which
         is more efficient in terms of memory and computation.
-
     """
+    center_backend = _get_center_backend()
+
     if not distance_matrix.flags.c_contiguous:
         # center_distance_matrix_cy requires c_contiguous, so make a copy
         distance_matrix = np.asarray(distance_matrix, order="C")
+
+    if center_backend == "numba":
+        try:
+            from ._center_distance_matrix_numba import center_distance_matrix_nb
+        except ImportError as e:
+            raise ImportError(
+                "center_backend='numba' requires the optional numba dependency."
+            ) from e
+
+        if inplace:
+            center_distance_matrix_nb(distance_matrix, distance_matrix)
+            return distance_matrix
+        centered = np.empty(distance_matrix.shape, distance_matrix.dtype)
+        center_distance_matrix_nb(distance_matrix, centered)
+        return centered
+
+    if center_backend == "numba_gpu":
+        gpu_backend = os.environ.get("SKBIO_NUMBA_GPU_BACKEND", "auto")
+        from ._center_distance_matrix_numba_gpu import (
+            center_distance_matrix_numba_gpu,
+        )
+
+        return center_distance_matrix_numba_gpu(
+            distance_matrix, inplace=inplace, gpu_backend=gpu_backend
+        )
 
     if inplace:
         center_distance_matrix_cy(distance_matrix, distance_matrix)
