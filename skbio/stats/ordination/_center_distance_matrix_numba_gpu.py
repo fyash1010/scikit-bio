@@ -73,7 +73,7 @@ def _compile_kernels(cuda):
 
     @cuda.jit
     def e_matrix_row_sums_kernel(mat, centered, row_sums):
-        row = cuda.grid(1)
+        row = cuda.blockIdx.x
         tid = cuda.threadIdx.x
         n = mat.shape[0]
         shared = cuda.shared.array(THREADS_PER_BLOCK, dtype=np.float64)
