@@ -100,7 +100,7 @@ def _compile_kernels(cuda):
 
     @cuda.jit
     def f_matrix_kernel(row_sums, global_mean, centered):
-        row, col = cuda.grid(2)
+        col, row = cuda.grid(2)
         n = centered.shape[0]
 
         if row < n and col < n:
@@ -133,7 +133,7 @@ def center_distance_matrix_numba_gpu(
     row_sums = d_row_sums.copy_to_host()
     global_mean = float(row_sums.sum() / (n * n))
 
-    threads = (16, 16)
+    threads = (32, 8)
     blocks = ((n + threads[0] - 1) // threads[0], (n + threads[1] - 1) // threads[1])
     f_kernel[blocks, threads](d_row_sums, global_mean, d_centered)
 

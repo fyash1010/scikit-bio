@@ -16,6 +16,10 @@ import numpy.testing as npt
 from skbio.stats.ordination import corr, mean_and_std, e_matrix, f_matrix, \
     center_distance_matrix
 
+from skbio.stats.ordination._principal_coordinate_analysis import (
+    center_distance_matrix as center_distance_matrix_array_api,
+)
+from skbio.stats.ordination import _utils as ord_utils
 from skbio.stats.ordination._utils import _e_matrix_inplace, _f_matrix_inplace
 
 
@@ -88,7 +92,8 @@ class TestUtils(TestCase):
 
         # make copy of matrix to test inplace centering
         matrix_copy = copy.deepcopy(self.dist_mat)
-        dm_centered = center_distance_matrix(matrix_copy, inplace=False)
+        with patch.dict("os.environ", {"SKBIO_PCOA_CENTER_BACKEND": "cpu"}):
+            dm_centered = center_distance_matrix(matrix_copy, inplace=False)
 
         # ensure that matrix_copy was NOT modified inplace
         self.assertTrue(np.array_equal(matrix_copy, self.dist_mat))
@@ -98,7 +103,8 @@ class TestUtils(TestCase):
 
         # next, sort same matrix inplace
         matrix_copy2 = copy.deepcopy(self.dist_mat)
-        dm_centered_inp = center_distance_matrix(matrix_copy2, inplace=True)
+        with patch.dict("os.environ", {"SKBIO_PCOA_CENTER_BACKEND": "cpu"}):
+            dm_centered_inp = center_distance_matrix(matrix_copy2, inplace=True)
 
         # and ensure that the result of inplace centering was correct
         npt.assert_almost_equal(dm_expected, dm_centered_inp)
@@ -108,7 +114,8 @@ class TestUtils(TestCase):
 
         # make copy of matrix to test inplace centering
         matrix_copy = copy.deepcopy(self.dist_mat_fp32)
-        dm_centered = center_distance_matrix(matrix_copy, inplace=False)
+        with patch.dict("os.environ", {"SKBIO_PCOA_CENTER_BACKEND": "cpu"}):
+            dm_centered = center_distance_matrix(matrix_copy, inplace=False)
 
         # ensure that matrix_copy was NOT modified inplace
         self.assertTrue(np.array_equal(matrix_copy, self.dist_mat_fp32))
@@ -118,7 +125,8 @@ class TestUtils(TestCase):
 
         # next, sort same matrix inplace
         matrix_copy2 = copy.deepcopy(self.dist_mat_fp32)
-        dm_centered_inp = center_distance_matrix(matrix_copy2, inplace=True)
+        with patch.dict("os.environ", {"SKBIO_PCOA_CENTER_BACKEND": "cpu"}):
+            dm_centered_inp = center_distance_matrix(matrix_copy2, inplace=True)
 
         # and ensure that the result of inplace centering was correct
         npt.assert_almost_equal(dm_expected, dm_centered_inp)
@@ -131,17 +139,35 @@ class TestUtils(TestCase):
             with self.assertRaisesRegex(ValueError, "SKBIO_PCOA_CENTER_BACKEND"):
                 center_distance_matrix(self.dist_mat)
 
+    def test_center_distance_matrix_cpu(self):
+        dm_expected = f_matrix(e_matrix(self.dist_mat))
+
+        with patch.dict("os.environ", {"SKBIO_PCOA_CENTER_BACKEND": "cpu"}), patch(
+            "skbio.stats.ordination._utils.center_distance_matrix_cy",
+            wraps=ord_utils.center_distance_matrix_cy,
+        ) as center_distance_matrix_cy:
+            dm_centered = center_distance_matrix(self.dist_mat)
+
+        center_distance_matrix_cy.assert_called_once()
+        npt.assert_allclose(dm_expected, dm_centered, rtol=1e-7, atol=1e-7)
+
     def test_center_distance_matrix_numba(self):
         try:
             import numba  # noqa: F401
         except Exception:
             self.skipTest("Numba is not importable.")
+        from skbio.stats.ordination import _center_distance_matrix_numba as cdm_numba
 
         dm_expected = f_matrix(e_matrix(self.dist_mat))
         matrix_copy = copy.deepcopy(self.dist_mat)
-        with patch.dict("os.environ", {"SKBIO_PCOA_CENTER_BACKEND": "numba"}):
+        with patch.dict("os.environ", {"SKBIO_PCOA_CENTER_BACKEND": "numba"}), patch(
+            "skbio.stats.ordination._center_distance_matrix_numba."
+            "center_distance_matrix_nb",
+            wraps=cdm_numba.center_distance_matrix_nb,
+        ) as center_distance_matrix_nb:
             dm_centered = center_distance_matrix(matrix_copy)
 
+        center_distance_matrix_nb.assert_called_once()
         self.assertTrue(np.array_equal(matrix_copy, self.dist_mat))
         npt.assert_allclose(dm_expected, dm_centered, rtol=1e-7, atol=1e-7)
 
@@ -150,16 +176,23 @@ class TestUtils(TestCase):
             import numba  # noqa: F401
         except Exception:
             self.skipTest("Numba is not importable.")
+        from skbio.stats.ordination import _center_distance_matrix_numba as cdm_numba
 
         dm_expected = f_matrix(e_matrix(self.dist_mat))
         matrix_copy = copy.deepcopy(self.dist_mat)
-        with patch.dict("os.environ", {"SKBIO_PCOA_CENTER_BACKEND": "numba"}):
+        with patch.dict("os.environ", {"SKBIO_PCOA_CENTER_BACKEND": "numba"}), patch(
+            "skbio.stats.ordination._center_distance_matrix_numba."
+            "center_distance_matrix_nb",
+            wraps=cdm_numba.center_distance_matrix_nb,
+        ) as center_distance_matrix_nb:
             dm_centered = center_distance_matrix(matrix_copy, inplace=True)
+        center_distance_matrix_nb.assert_called_once()
         npt.assert_allclose(dm_expected, dm_centered, rtol=1e-7, atol=1e-7)
         npt.assert_allclose(dm_expected, matrix_copy, rtol=1e-7, atol=1e-7)
 
     def test_center_distance_matrix_numba_gpu(self):
         try:
+            from skbio.stats.ordination import _center_distance_matrix_numba_gpu
             from skbio.stats.ordination._center_distance_matrix_numba_gpu import (
                 NumbaGPUUnavailableError,
             )
@@ -173,10 +206,50 @@ class TestUtils(TestCase):
                     "SKBIO_PCOA_CENTER_BACKEND": "numba_gpu",
                     "SKBIO_NUMBA_GPU_BACKEND": "cuda",
                 },
-            ):
+            ), patch(
+                "skbio.stats.ordination._center_distance_matrix_numba_gpu."
+                "center_distance_matrix_numba_gpu",
+                wraps=(
+                    _center_distance_matrix_numba_gpu
+                    .center_distance_matrix_numba_gpu
+                ),
+            ) as center_distance_matrix_numba_gpu:
                 dm_centered = center_distance_matrix(self.dist_mat)
         except NumbaGPUUnavailableError:
             self.skipTest("Numba GPU backend is not available.")
+
+        center_distance_matrix_numba_gpu.assert_called_once()
+        dm_expected = f_matrix(e_matrix(self.dist_mat))
+        npt.assert_allclose(dm_expected, dm_centered, rtol=1e-7, atol=1e-7)
+
+    def test_center_distance_matrix_jax(self):
+        try:
+            import jax
+            import jax.numpy as jnp
+        except Exception:
+            self.skipTest("JAX is not importable.")
+
+        dm_expected = f_matrix(e_matrix(self.dist_mat_fp32))
+        dist_mat = jnp.asarray(self.dist_mat_fp32)
+        dm_centered = center_distance_matrix_array_api(dist_mat)
+        self.assertIsInstance(dm_centered, jax.Array)
+        dm_centered = np.asarray(jax.device_get(dm_centered))
+
+        npt.assert_allclose(dm_expected, dm_centered, rtol=1e-5, atol=1e-5)
+
+    def test_center_distance_matrix_cupy(self):
+        try:
+            import cupy as cp
+        except Exception:
+            self.skipTest("CuPy is not importable.")
+
+        try:
+            dist_mat = cp.asarray(self.dist_mat)
+            dm_centered = center_distance_matrix_array_api(dist_mat)
+            self.assertIsInstance(dm_centered, cp.ndarray)
+            dm_centered = cp.asnumpy(dm_centered)
+        except Exception as e:
+            self.skipTest(f"CuPy backend is not available: {e}")
 
         dm_expected = f_matrix(e_matrix(self.dist_mat))
         npt.assert_allclose(dm_expected, dm_centered, rtol=1e-7, atol=1e-7)
