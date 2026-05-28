@@ -21,11 +21,12 @@ class NumbaGPUUnavailableError(RuntimeError):
     """Raised when the optional Numba GPU backend cannot be used."""
 
 
-def _get_cuda_module(gpu_backend="auto"):
-    """Return a CUDA-compatible Numba module.
+def _get_gpu_module(gpu_backend="auto"):
+    """Return the requested Numba GPU backend module.
 
-    ``gpu_backend="hip"`` uses ROCm numba-hip's CUDA-compatible pose mode.
-    Numba is imported lazily so it remains an optional runtime dependency.
+    Numba is imported lazily so GPU support remains an optional runtime
+    dependency. ``gpu_backend="cuda"`` uses NVIDIA Numba CUDA, while
+    ``gpu_backend="hip"`` uses ROCm Numba-HIP directly.
     """
     gpu_backend = os.environ.get("SKBIO_NUMBA_GPU_BACKEND", gpu_backend)
     if gpu_backend not in {"auto", "cuda", "hip"}:
@@ -33,27 +34,38 @@ def _get_cuda_module(gpu_backend="auto"):
             f"gpu_backend must be 'auto', 'cuda', or 'hip', not {gpu_backend!r}."
         )
 
-    try:
-        if gpu_backend == "hip":
-            from numba import hip
+    errors = []
+    candidates = ("cuda", "hip") if gpu_backend == "auto" else (gpu_backend,)
+    for candidate in candidates:
+        try:
+            if candidate == "cuda":
+                from numba import cuda as gpu
+            else:
+                from numba import hip as gpu
+        except Exception as e:
+            errors.append((candidate, e))
+            continue
 
-            hip.pose_as_cuda()
+        try:
+            available = gpu.is_available()
+        except Exception as e:
+            errors.append((candidate, e))
+            continue
 
-        from numba import cuda
-    except Exception as e:
-        raise NumbaGPUUnavailableError(
-            "center_backend='numba_gpu' requires Numba CUDA or numba-hip."
-        ) from e
+        if available:
+            return gpu
+        errors.append((candidate, NumbaGPUUnavailableError("backend unavailable")))
 
-    try:
-        available = cuda.is_available()
-    except Exception as e:
-        raise NumbaGPUUnavailableError("Numba GPU backend is not available.") from e
+    detail = "; ".join(f"{name}: {type(err).__name__}: {err}" for name, err in errors)
+    raise NumbaGPUUnavailableError(
+        "center_backend='numba_gpu' requires an available Numba CUDA "
+        f"or Numba-HIP backend. Tried {gpu_backend!r}. {detail}"
+    )
 
-    if not available:
-        raise NumbaGPUUnavailableError("Numba GPU backend is not available.")
 
-    return cuda
+def _get_cuda_module(gpu_backend="auto"):
+    """Backward-compatible alias for the selected Numba GPU module."""
+    return _get_gpu_module(gpu_backend)
 
 
 def _validate_distance_matrix(distance_matrix):
@@ -77,45 +89,51 @@ def _validate_device_distance_matrix(distance_matrix):
         np.dtype(np.float64),
     ):
         raise TypeError("Numba GPU centering requires float32 or float64 input.")
-    if not hasattr(distance_matrix, "__cuda_array_interface__"):
-        raise TypeError("Device input must expose __cuda_array_interface__.")
+    if not (
+        hasattr(distance_matrix, "__cuda_array_interface__")
+        or hasattr(distance_matrix, "__hip_array_interface__")
+    ):
+        raise TypeError(
+            "Device input must expose __cuda_array_interface__ or "
+            "__hip_array_interface__."
+        )
 
 
-def _compile_kernels(cuda):
-    cache_key = id(cuda)
+def _compile_kernels(gpu):
+    cache_key = id(gpu)
     if cache_key in _KERNEL_CACHE:
         return _KERNEL_CACHE[cache_key]
 
-    @cuda.jit
+    @gpu.jit
     def e_matrix_row_sums_kernel(mat, centered, row_sums):
-        row = cuda.blockIdx.x
-        tid = cuda.threadIdx.x
+        row = gpu.blockIdx.x
+        tid = gpu.threadIdx.x
         n = mat.shape[0]
-        shared = cuda.shared.array(THREADS_PER_BLOCK, dtype=np.float64)
+        shared = gpu.shared.array(THREADS_PER_BLOCK, dtype=np.float64)
 
         row_sum = 0.0
-        for col in range(tid, n, cuda.blockDim.x):
+        for col in range(tid, n, gpu.blockDim.x):
             val = float(mat[row, col])
             e_val = -0.5 * val * val
             centered[row, col] = e_val
             row_sum += e_val
 
         shared[tid] = row_sum
-        cuda.syncthreads()
+        gpu.syncthreads()
 
-        stride = cuda.blockDim.x // 2
+        stride = gpu.blockDim.x // 2
         while stride > 0:
             if tid < stride:
                 shared[tid] += shared[tid + stride]
-            cuda.syncthreads()
+            gpu.syncthreads()
             stride //= 2
 
         if tid == 0:
             row_sums[row] = shared[0]
 
-    @cuda.jit
+    @gpu.jit
     def f_matrix_kernel(row_sums, global_mean, centered):
-        col, row = cuda.grid(2)
+        col, row = gpu.grid(2)
         n = centered.shape[0]
 
         if row < n and col < n:
@@ -136,13 +154,13 @@ def center_distance_matrix_numba_gpu(
     if not distance_matrix.flags.c_contiguous:
         distance_matrix = np.asarray(distance_matrix, order="C")
 
-    cuda = _get_cuda_module(gpu_backend)
-    e_kernel, f_kernel = _compile_kernels(cuda)
+    gpu = _get_gpu_module(gpu_backend)
+    e_kernel, f_kernel = _compile_kernels(gpu)
 
     n = distance_matrix.shape[0]
-    d_mat = cuda.to_device(distance_matrix)
-    d_centered = d_mat if inplace else cuda.device_array(d_mat.shape, dtype=d_mat.dtype)
-    d_row_sums = cuda.device_array((n,), dtype=np.float64)
+    d_mat = gpu.to_device(distance_matrix)
+    d_centered = d_mat if inplace else gpu.device_array(d_mat.shape, dtype=d_mat.dtype)
+    d_row_sums = gpu.device_array((n,), dtype=np.float64)
 
     e_kernel[n, THREADS_PER_BLOCK](d_mat, d_centered, d_row_sums)
     row_sums = d_row_sums.copy_to_host()
@@ -170,13 +188,13 @@ def center_distance_matrix_numba_gpu_device(
     """
     _validate_device_distance_matrix(distance_matrix)
 
-    cuda = _get_cuda_module(gpu_backend)
-    e_kernel, f_kernel = _compile_kernels(cuda)
+    gpu = _get_gpu_module(gpu_backend)
+    e_kernel, f_kernel = _compile_kernels(gpu)
 
     n = distance_matrix.shape[0]
-    d_mat = cuda.as_cuda_array(distance_matrix)
-    d_centered = d_mat if inplace else cuda.device_array(d_mat.shape, dtype=d_mat.dtype)
-    d_row_sums = cuda.device_array((n,), dtype=np.float64)
+    d_mat = gpu.as_cuda_array(distance_matrix)
+    d_centered = d_mat if inplace else gpu.device_array(d_mat.shape, dtype=d_mat.dtype)
+    d_row_sums = gpu.device_array((n,), dtype=np.float64)
 
     e_kernel[n, THREADS_PER_BLOCK](d_mat, d_centered, d_row_sums)
     row_sums = d_row_sums.copy_to_host()
