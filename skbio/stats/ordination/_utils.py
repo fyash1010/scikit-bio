@@ -15,10 +15,10 @@ from ._cutils import center_distance_matrix_cy
 
 def _get_center_backend():
     center_backend = os.environ.get("SKBIO_PCOA_CENTER_BACKEND", "cpu")
-    if center_backend not in {"cpu", "numba", "numba_gpu"}:
+    if center_backend not in {"cpu", "numba"}:
         raise ValueError(
-            "SKBIO_PCOA_CENTER_BACKEND must be 'cpu', 'numba', or "
-            f"'numba_gpu', not {center_backend!r}."
+            "SKBIO_PCOA_CENTER_BACKEND must be 'cpu' or 'numba', "
+            f"not {center_backend!r}."
         )
     return center_backend
 
@@ -246,16 +246,6 @@ def center_distance_matrix(distance_matrix, inplace=False):
         centered = np.empty(distance_matrix.shape, distance_matrix.dtype)
         center_distance_matrix_nb(distance_matrix, centered)
         return centered
-
-    if center_backend == "numba_gpu":
-        gpu_backend = os.environ.get("SKBIO_NUMBA_GPU_BACKEND", "auto")
-        from ._center_distance_matrix_numba_gpu import (
-            center_distance_matrix_numba_gpu,
-        )
-
-        return center_distance_matrix_numba_gpu(
-            distance_matrix, inplace=inplace, gpu_backend=gpu_backend
-        )
 
     if inplace:
         center_distance_matrix_cy(distance_matrix, distance_matrix)

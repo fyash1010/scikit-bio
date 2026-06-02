@@ -12,7 +12,7 @@ import numpy as np
 from numba import njit, prange
 
 
-@njit(parallel=True, fastmath=True, cache=True)
+@njit(parallel=True, cache=True)
 def e_matrix_means_nb(mat, centered, row_means):
     """Apply E-matrix transform and collect row/global means in one pass."""
     n = mat.shape[0]
@@ -33,7 +33,7 @@ def e_matrix_means_nb(mat, centered, row_means):
     return (global_sum / np.float64(n)) / np.float64(n)
 
 
-@njit(parallel=True, fastmath=True, cache=True)
+@njit(parallel=True, cache=True)
 def f_matrix_inplace_nb(row_means, global_mean, centered):
     """Double-center E-matrix in-place."""
     n = centered.shape[0]
