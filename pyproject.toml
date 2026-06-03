@@ -146,6 +146,9 @@ doctest_optionflags = [
     "NORMALIZE_WHITESPACE",
     "IGNORE_EXCEPTION_DETAIL",
 ]
+markers = [
+    "numba_code: tests that exercise optional Numba-accelerated code paths",
+]
 
 [tool.check-manifest]
 ignore = [

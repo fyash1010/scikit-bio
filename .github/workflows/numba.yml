@@ -1,0 +1,59 @@
+name: Numba
+
+on:
+  pull_request:
+    branches: [ development_numba ]
+    paths-ignore: ["web/**", "**.md", "README.rst"]
+  workflow_dispatch:
+
+env:
+  latest_python: "3.14"
+
+jobs:
+  conf:
+    # This job is needed to route the global environment variables into
+    # a context that's available for matrix (and name, but that's unimportant)
+    name: Prepare Numba Test Plan
+    runs-on: ubuntu-latest
+    outputs:
+      latest_python: ${{ steps.set-vars.outputs.latest_python }}
+    steps:
+      - name: Report Plan
+        id: set-vars
+        run: |
+          echo "latest_python=$latest_python" >> $GITHUB_OUTPUT
+
+  test:
+    name: Numba (${{ needs.conf.outputs.latest_python }}, ${{ matrix.os }})
+    needs: conf
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash -l {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-15-intel is omitted: Numba and llvmlite no longer ship macOS
+        # x86_64 wheels, so `pip install numba` would fall back to a source
+        # build requiring an LLVM toolchain.
+        os: [ubuntu-latest, macos-latest, windows-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+          python-version: ${{ needs.conf.outputs.latest_python }}
+          environment-file: ci/conda_host_env.yml
+
+      - name: Install scikit-bio + Numba
+        run: |
+          conda install -q --yes -c conda-forge --file ci/conda_requirements.txt --file ci/requirements.test.txt
+          pip install numba
+          pip install --no-deps .
+          conda list
+
+      - name: Run Numba-marked tests
+        run: cd ci && pytest -m numba_code --pyargs skbio
+
+      - name: Run full test suite with Numba installed
+        run: make test

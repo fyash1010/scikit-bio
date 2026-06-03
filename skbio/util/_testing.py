@@ -11,6 +11,7 @@
 import inspect
 import os
 import sys
+import unittest
 
 import numpy as np
 import numpy.testing as npt
@@ -452,3 +453,20 @@ def pytestrunner():
 
     errno = pytest.main(args=["--pyargs", "skbio"] + sys.argv[1:])
     sys.exit(errno)
+
+
+def numba_code(test_func):
+    """Decorator: mark a test as requiring optional Numba support."""
+    try:
+        import pytest
+
+        test_func = pytest.mark.numba_code(test_func)
+    except ImportError:
+        pass
+
+    try:
+        import numba  # noqa: F401
+    except ImportError:
+        test_func = unittest.skip("Numba is not installed.")(test_func)
+
+    return test_func

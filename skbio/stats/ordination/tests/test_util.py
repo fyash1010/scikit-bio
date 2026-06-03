@@ -19,6 +19,7 @@ from skbio.stats.ordination import corr, mean_and_std, e_matrix, f_matrix, \
 from skbio.stats.ordination import _utils as ord_utils
 from skbio.stats.ordination._cutils import center_distance_matrix_cy
 from skbio.stats.ordination._utils import _e_matrix_inplace, _f_matrix_inplace
+from skbio.util import numba_code
 
 
 class TestUtils(TestCase):
@@ -149,11 +150,8 @@ class TestUtils(TestCase):
         center_distance_matrix_cy.assert_called_once()
         npt.assert_allclose(dm_expected, dm_centered, rtol=1e-7, atol=1e-7)
 
+    @numba_code
     def test_center_distance_matrix_numba(self):
-        try:
-            import numba  # noqa: F401
-        except Exception:
-            self.skipTest("Numba is not importable.")
         from skbio.stats.ordination import _center_distance_matrix_numba as cdm_numba
 
         dm_expected = f_matrix(e_matrix(self.dist_mat))
@@ -169,11 +167,8 @@ class TestUtils(TestCase):
         self.assertTrue(np.array_equal(matrix_copy, self.dist_mat))
         npt.assert_allclose(dm_expected, dm_centered, rtol=1e-7, atol=1e-7)
 
+    @numba_code
     def test_center_distance_matrix_numba_inplace(self):
-        try:
-            import numba  # noqa: F401
-        except Exception:
-            self.skipTest("Numba is not importable.")
         from skbio.stats.ordination import _center_distance_matrix_numba as cdm_numba
 
         dm_expected = f_matrix(e_matrix(self.dist_mat))
@@ -188,11 +183,8 @@ class TestUtils(TestCase):
         npt.assert_allclose(dm_expected, dm_centered, rtol=1e-7, atol=1e-7)
         npt.assert_allclose(dm_expected, matrix_copy, rtol=1e-7, atol=1e-7)
 
+    @numba_code
     def test_center_distance_matrix_numba_matches_cython(self):
-        try:
-            import numba  # noqa: F401
-        except Exception:
-            self.skipTest("Numba is not importable.")
         from skbio.stats.ordination._center_distance_matrix_numba import (
             center_distance_matrix_nb,
         )

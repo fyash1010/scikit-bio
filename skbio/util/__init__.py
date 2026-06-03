@@ -84,6 +84,7 @@ from ._testing import (
     assert_ordination_results_equal,
     assert_ordination_results_equal_np,
     assert_data_frame_almost_equal,
+    numba_code,
     pytestrunner,
 )
 from ._decorator import (
@@ -107,6 +108,7 @@ __all__ = [
     "assert_ordination_results_equal",
     "assert_ordination_results_equal_np",
     "assert_data_frame_almost_equal",
+    "numba_code",
     "pytestrunner",
     "get_package",
     "PlottableMixin",
