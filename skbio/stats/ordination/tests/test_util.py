@@ -22,7 +22,9 @@ from skbio.stats.ordination._utils import _e_matrix_inplace, _f_matrix_inplace
 from skbio.util import numba_code
 
 
-class TestUtils(TestCase):
+class TestUtilsBase(TestCase):
+    """Shared fixtures for ordination utility tests."""
+
     def setUp(self):
         self.x = np.array([[1, 2, 3], [4, 5, 6]])
         self.y = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
@@ -38,6 +40,8 @@ class TestUtils(TestCase):
                                          [5., 4., 0., 3.], [5., 9., 3., 0.]],
                                         dtype=np.float32)
 
+
+class TestUtils(TestUtilsBase):
     def test_mean_and_std(self):
         obs = mean_and_std(self.x)
         npt.assert_almost_equal((3.5, 1.707825127), obs)
@@ -150,6 +154,48 @@ class TestUtils(TestCase):
         center_distance_matrix_cy.assert_called_once()
         npt.assert_allclose(dm_expected, dm_centered, rtol=1e-7, atol=1e-7)
 
+
+class CenterDistanceMatrixNumbaTests(TestUtilsBase):
+    """Tests for the CPU Numba center-distance-matrix helper and dispatch."""
+
+    def _assert_center_distance_matrix(self, func, mat, rtol, atol):
+        dm_expected = f_matrix(e_matrix(mat))
+        centered = np.empty_like(mat)
+
+        func(mat, centered)
+
+        npt.assert_allclose(dm_expected, centered, rtol=rtol, atol=atol)
+
+    def test_center_distance_matrix_float64_cy(self):
+        self._assert_center_distance_matrix(
+            center_distance_matrix_cy, self.dist_mat, rtol=1e-7, atol=1e-7
+        )
+
+    @numba_code
+    def test_center_distance_matrix_float64_numba(self):
+        from skbio.stats.ordination._center_distance_matrix_numba import (
+            center_distance_matrix_nb,
+        )
+
+        self._assert_center_distance_matrix(
+            center_distance_matrix_nb, self.dist_mat, rtol=1e-7, atol=1e-7
+        )
+
+    def test_center_distance_matrix_float32_cy(self):
+        self._assert_center_distance_matrix(
+            center_distance_matrix_cy, self.dist_mat_fp32, rtol=1e-5, atol=1e-5
+        )
+
+    @numba_code
+    def test_center_distance_matrix_float32_numba(self):
+        from skbio.stats.ordination._center_distance_matrix_numba import (
+            center_distance_matrix_nb,
+        )
+
+        self._assert_center_distance_matrix(
+            center_distance_matrix_nb, self.dist_mat_fp32, rtol=1e-5, atol=1e-5
+        )
+
     @numba_code
     def test_center_distance_matrix_numba(self):
         from skbio.stats.ordination import _center_distance_matrix_numba as cdm_numba
@@ -205,6 +251,19 @@ class TestUtils(TestCase):
             center_distance_matrix_nb(mat, nb_centered)
 
             npt.assert_allclose(nb_centered, cy_centered, rtol=rtol, atol=atol)
+
+    @numba_code
+    def test_center_distance_matrix_numba_matches_cpu_dispatch(self):
+        matrix_copy = copy.deepcopy(self.dist_mat)
+
+        with patch.dict("os.environ", {"SKBIO_PCOA_CENTER_BACKEND": "numba"}):
+            dm_centered_numba = center_distance_matrix(matrix_copy)
+
+        with patch.dict("os.environ", {"SKBIO_PCOA_CENTER_BACKEND": "cpu"}):
+            dm_centered_cpu = center_distance_matrix(self.dist_mat)
+
+        self.assertTrue(np.array_equal(matrix_copy, self.dist_mat))
+        npt.assert_allclose(dm_centered_numba, dm_centered_cpu, rtol=1e-7, atol=1e-7)
 
 
 if __name__ == '__main__':
